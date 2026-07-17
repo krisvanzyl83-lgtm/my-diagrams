@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Project Lifecycle Progress</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html, body { width:100%; overflow-x:hidden; font-family: Helvetica, Arial, sans-serif; background:#fafafb; }
+
+  #capture { width:100%; max-width:1900px; margin:0 auto; padding:24px; box-sizing:border-box; background:#fff; }
+
+  #legend { display:flex; align-items:center; gap:28px; margin-bottom:22px; flex-wrap:wrap; }
+  .legend-item { display:flex; align-items:center; gap:8px; font-size:14px; color:#737a86; }
+  .legend-dot { width:12px; height:12px; border-radius:50%; flex-shrink:0; }
+
+  #phaseBar { display:flex; width:100%; overflow:hidden; border-radius:4px; }
+  .phase { color:#fff; text-align:center; font-weight:700; font-size:13px; letter-spacing:0.4px; padding:9px 10px; display:flex; align-items:center; justify-content:center; min-height:34px; flex-basis:0; }
+
+  #stages { display:flex; width:100%; padding-top:26px; position:relative; }
+  .stage-col { flex:1; min-width:0; display:flex; flex-direction:column; align-items:center; }
+  .circle-wrap { height:68px; width:100%; display:flex; align-items:center; justify-content:center; position:relative; }
+  .connector { position:absolute; height:2px; right:50%; width:100%; top:34px; margin-top:-1px; z-index:0; }
+  .circle { position:relative; z-index:1; border-radius:50%; display:flex; align-items:center; justify-content:center; font-weight:700; box-sizing:border-box; flex-shrink:0; background:#fff; transition:width .15s, height .15s, filter .15s; }
+  .circle.editable { cursor:pointer; }
+  .circle.editable:hover { filter:brightness(0.96); }
+  .stage-label { margin-top:10px; font-size:13px; text-align:center; line-height:1.35; width:100%; max-width:110px; word-wrap:break-word; overflow-wrap:break-word; }
+
+  /* Embed mode: viewed inside an iframe via ?stage=, no bottom padding */
+  body.embed #capture { padding:16px 24px; }
+</style>
+</head>
+<body>
+
+<div id="capture">
+  <div id="legend">
+    <div class="legend-item"><div class="legend-dot" style="background:#35b637;"></div>Completed</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#e35c2e;"></div>Current stage</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#dcdfe4;"></div>Upcoming</div>
+  </div>
+  <div id="phaseBar"></div>
+  <div id="stages"></div>
+</div>
+
+<script>
+const completedColor = '#35b637';
+const currentColor = '#e35c2e';
+const upcomingBorder = '#dcdfe4';
+
+// ---- Independent stage per project ----
+// Open the file directly (no query string) for the interactive editor + PNG/SVG export.
+// Embed it per-project with ?stage=N — that project's iframe becomes a read-only status view.
+const params = new URLSearchParams(window.location.search);
+const stageParam = params.get('stage');
+const embedMode = stageParam !== null;
+let currentStage = embedMode ? Math.max(1, Math.min(15, parseInt(stageParam, 10) || 1)) : 6;
+
+if (embedMode) {
+  document.body.classList.add('embed');
+}
+
+const phases = [
+  { label: 'REQUIREMENTS VALIDATION & DESIGN APPROVAL', count: 5, color: '#5b86c2' },
+  { label: 'DEVELOPMENT & QA TESTING', count: 4, color: '#3f6aa8' },
+  { label: 'ACCEPTANCE, CHANGE & RELEASE', count: 6, color: '#2c4d80' },
+];
+const labels = [
+  'Requirement Validation & Refinement', 'Upfront Design & Estimation', 'Design Review & DA Approval',
+  'Development Readiness', 'Feature Branch Creation', 'Development & Dev Testing',
+  'Pull Request / Peer Review', 'Create Deployment Artifacts', 'Quality Assurance',
+  'UAT Acceptance', 'CAB Readiness', 'CAB', 'Deploy', 'Pilot', 'Launch'
+];
+
+const phaseBarEl = document.getElementById('phaseBar');
+const stagesEl = document.getElementById('stages');
+
+function render() {
+  phaseBarEl.innerHTML = '';
+  phases.forEach(p => {
+    const div = document.createElement('div');
+    div.className = 'phase';
+    div.style.flexGrow = p.count;
+    div.style.background = p.color;
+    div.textContent = p.label;
+    phaseBarEl.appendChild(div);
+  });
+
+  stagesEl.innerHTML = '';
+  labels.forEach((label, i) => {
+    const n = i + 1;
+    const isCompleted = n < currentStage;
+    const isCurrent = n === currentStage;
+    const circleSize = isCurrent ? 68 : 46;
+    let border = upcomingBorder, textColor = '#8a8f99', labelColor = '#737a86', labelWeight = 500, sw = 2, fontSize = 17;
+    if (isCompleted) { border = completedColor; textColor = completedColor; labelColor = '#4d5561'; labelWeight = 600; }
+    if (isCurrent) { border = currentColor; textColor = currentColor; labelColor = currentColor; labelWeight = 700; sw = 3; fontSize = 20; }
+
+    const col = document.createElement('div');
+    col.className = 'stage-col';
+
+    const wrap = document.createElement('div');
+    wrap.className = 'circle-wrap';
+
+    if (i > 0) {
+      const conn = document.createElement('div');
+      conn.className = 'connector';
+      conn.style.background = n <= currentStage ? completedColor : upcomingBorder;
+      wrap.appendChild(conn);
+    }
+
+    const circle = document.createElement('div');
+    circle.className = 'circle' + (embedMode ? '' : ' editable');
+    circle.style.width = circleSize + 'px';
+    circle.style.height = circleSize + 'px';
+    circle.style.color = textColor;
+    circle.style.border = sw + 'px solid ' + border;
+    circle.style.fontSize = fontSize + 'px';
+    circle.textContent = n;
+    if (!embedMode) {
+      circle.addEventListener('click', () => { currentStage = n; render(); });
+    }
+    wrap.appendChild(circle);
+    col.appendChild(wrap);
+
+    const lbl = document.createElement('div');
+    lbl.className = 'stage-label';
+    lbl.style.color = labelColor;
+    lbl.style.fontWeight = labelWeight;
+    lbl.textContent = label;
+    col.appendChild(lbl);
+
+    stagesEl.appendChild(col);
+  });
+
+  reportHeight();
+}
+render();
+
+// ---- Auto-height: tell the parent Confluence page how tall we are ----
+function reportHeight() {
+  requestAnimationFrame(() => {
+    const height = document.documentElement.scrollHeight;
+    window.parent.postMessage({ iframeHeight: height }, '*');
+    // For Confluence's built-in iFrame macro, which only accepts a fixed
+    // Height value (no postMessage support): open this file directly in a
+    // browser tab with ?stage=N in the URL, open DevTools > Console, and
+    // read this logged value. Use that number as the macro's Height field.
+    console.log('[project-lifecycle] content height:', height + 'px — use this in the Confluence iFrame macro Height field');
+  });
+}
+window.addEventListener('resize', reportHeight);
+</script>
+</body>
+</html>
