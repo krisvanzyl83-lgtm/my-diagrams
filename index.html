@@ -9,9 +9,13 @@
 
   #capture { width:100%; max-width:1900px; margin:0 auto; padding:24px; box-sizing:border-box; background:#fff; }
 
-  #legend { display:flex; align-items:center; gap:28px; margin-bottom:22px; flex-wrap:wrap; }
+  #legend { display:flex; align-items:center; gap:28px; margin-bottom:12px; flex-wrap:wrap; }
   .legend-item { display:flex; align-items:center; gap:8px; font-size:14px; color:#737a86; }
   .legend-dot { width:12px; height:12px; border-radius:50%; flex-shrink:0; }
+
+  #statusMsg { font-size:12px; color:#737a86; min-height:16px; margin-bottom:10px; }
+  #statusMsg.error { color:#c0392b; }
+  #statusMsg.ok { color:#35b637; }
 
   #phaseBar { display:flex; width:100%; overflow:hidden; border-radius:4px; }
   .phase { color:#fff; text-align:center; font-weight:700; font-size:13px; letter-spacing:0.4px; padding:9px 10px; display:flex; align-items:center; justify-content:center; min-height:34px; flex-basis:0; }
@@ -25,7 +29,9 @@
   .circle.editable:hover { filter:brightness(0.96); }
   .stage-label { margin-top:10px; font-size:13px; text-align:center; line-height:1.35; width:100%; max-width:110px; word-wrap:break-word; overflow-wrap:break-word; }
 
-  /* Embed mode: viewed inside an iframe via ?stage=, no bottom padding */
+  body.saving .circle.editable { pointer-events:none; opacity:0.6; }
+
+  /* Embed mode: viewed inside an iframe (?stage= or ?project=), tighter padding */
   body.embed #capture { padding:16px 24px; }
 </style>
 </head>
@@ -37,6 +43,7 @@
     <div class="legend-item"><div class="legend-dot" style="background:#e35c2e;"></div>Current stage</div>
     <div class="legend-item"><div class="legend-dot" style="background:#dcdfe4;"></div>Upcoming</div>
   </div>
+  <div id="statusMsg"></div>
   <div id="phaseBar"></div>
   <div id="stages"></div>
 </div>
@@ -46,17 +53,18 @@ const completedColor = '#35b637';
 const currentColor = '#e35c2e';
 const upcomingBorder = '#dcdfe4';
 
-// ---- Independent stage per project ----
-// Open the file directly (no query string) for the interactive editor + PNG/SVG export.
-// Embed it per-project with ?stage=N — that project's iframe becomes a read-only status view.
-const params = new URLSearchParams(window.location.search);
-const stageParam = params.get('stage');
-const embedMode = stageParam !== null;
-let currentStage = embedMode ? Math.max(1, Math.min(15, parseInt(stageParam, 10) || 1)) : 6;
+// ================== GitHub-backed shared state config ==================
+const GITHUB_OWNER  = 'krisvanzyl83-lgtm';
+const GITHUB_REPO   = 'my-diagrams';
+const GITHUB_BRANCH = 'main';
+const DATA_PATH     = 'data/stages.json';
 
-if (embedMode) {
-  document.body.classList.add('embed');
-}
+// PASTE your fine-grained GitHub token here (Settings > Developer settings >
+// Personal access tokens > Fine-grained, scoped to ONLY this repo, Contents: Read & write).
+// This token is visible to anyone who views this page's source — only ever use a token
+// scoped to this one low-value repo, never a broad/account-wide token.
+const GITHUB_TOKEN = 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;
+// ==========================================================================
 
 const phases = [
   { label: 'REQUIREMENTS VALIDATION & DESIGN APPROVAL', count: 5, color: '#5b86c2' },
@@ -70,8 +78,49 @@ const labels = [
   'UAT Acceptance', 'CAB Readiness', 'CAB', 'Deploy', 'Pilot', 'Launch'
 ];
 
+function clampStage(n) {
+  n = parseInt(n, 10);
+  if (isNaN(n)) return 1;
+  return Math.max(1, Math.min(labels.length, n));
+}
+
+// ---- Determine mode from the URL ----
+// ?project=slug  -> SHARED mode: reads/writes data/stages.json on GitHub, clickable, confirms before saving
+// ?stage=N       -> PINNED mode: fixed display only, not clickable (old behavior, no GitHub setup needed)
+// (neither)      -> STANDALONE mode: local click-to-preview only, nothing is saved anywhere
+const params = new URLSearchParams(window.location.search);
+const projectParam = params.get('project');
+const stageParam = params.get('stage');
+
+let mode = 'standalone';
+let currentStage = 6;
+let saving = false;
+
+if (projectParam) {
+  mode = 'shared';
+} else if (stageParam !== null) {
+  mode = 'pinned';
+  currentStage = clampStage(stageParam);
+}
+
+if (mode !== 'standalone') {
+  document.body.classList.add('embed');
+}
+
 const phaseBarEl = document.getElementById('phaseBar');
 const stagesEl = document.getElementById('stages');
+const statusEl = document.getElementById('statusMsg');
+
+function showStatus(msg, isError) {
+  statusEl.textContent = msg || '';
+  statusEl.classList.toggle('error', !!isError);
+  statusEl.classList.toggle('ok', !isError && !!msg);
+}
+
+function setSaving(state) {
+  saving = state;
+  document.body.classList.toggle('saving', state);
+}
 
 function render() {
   phaseBarEl.innerHTML = '';
@@ -108,15 +157,16 @@ function render() {
     }
 
     const circle = document.createElement('div');
-    circle.className = 'circle' + (embedMode ? '' : ' editable');
+    const clickable = mode !== 'pinned';
+    circle.className = 'circle' + (clickable ? ' editable' : '');
     circle.style.width = circleSize + 'px';
     circle.style.height = circleSize + 'px';
     circle.style.color = textColor;
     circle.style.border = sw + 'px solid ' + border;
     circle.style.fontSize = fontSize + 'px';
     circle.textContent = n;
-    if (!embedMode) {
-      circle.addEventListener('click', () => { currentStage = n; render(); });
+    if (clickable) {
+      circle.addEventListener('click', () => onStageClick(n));
     }
     wrap.appendChild(circle);
     col.appendChild(wrap);
@@ -133,21 +183,106 @@ function render() {
 
   reportHeight();
 }
-render();
 
-// ---- Auto-height: tell the parent Confluence page how tall we are ----
+function onStageClick(n) {
+  if (saving) return;
+  if (mode === 'shared') {
+    saveSharedStage(n);
+  } else {
+    // standalone: local preview only, nothing persisted
+    currentStage = n;
+    render();
+  }
+}
+
+// ================== Shared mode: load & save via GitHub ==================
+async function loadSharedStage() {
+  showStatus('Loading current status…');
+  try {
+    const url = 'https://raw.githubusercontent.com/' + GITHUB_OWNER + '/' + GITHUB_REPO + '/' +
+                GITHUB_BRANCH + '/' + DATA_PATH + '?t=' + Date.now();
+    const res = await fetch(url);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    if (Object.prototype.hasOwnProperty.call(data, projectParam)) {
+      currentStage = clampStage(data[projectParam]);
+      showStatus('');
+    } else {
+      showStatus('No entry yet for "' + projectParam + '" — add it to data/stages.json, or click a stage to create it.', true);
+    }
+  } catch (e) {
+    console.error('[project-lifecycle] could not load shared stage', e);
+    showStatus('Could not load live status (showing last known stage). ' + e.message, true);
+  }
+  render();
+}
+
+async function saveSharedStage(n) {
+  if (!GITHUB_TOKEN || GITHUB_TOKEN === 'PASTE_YOUR_TOKEN_HERE') {
+    showStatus('No GitHub token configured in this file yet — cannot save.', true);
+    return;
+  }
+  const ok = window.confirm('Set "' + projectParam + '" to stage ' + n + ' for everyone viewing this page?');
+  if (!ok) return;
+
+  setSaving(true);
+  showStatus('Saving…');
+  try {
+    const apiUrl = 'https://api.github.com/repos/' + GITHUB_OWNER + '/' + GITHUB_REPO + '/contents/' + DATA_PATH + '?ref=' + GITHUB_BRANCH;
+    const getRes = await fetch(apiUrl, {
+      headers: { Authorization: 'Bearer ' + GITHUB_TOKEN, Accept: 'application/vnd.github+json' }
+    });
+    if (!getRes.ok) throw new Error('Could not read data file (HTTP ' + getRes.status + ')');
+    const fileData = await getRes.json();
+    const currentJson = JSON.parse(decodeURIComponent(escape(atob(fileData.content.replace(/\n/g, '')))));
+    currentJson[projectParam] = n;
+    const newContentB64 = btoa(unescape(encodeURIComponent(JSON.stringify(currentJson, null, 2))));
+
+    const putRes = await fetch('https://api.github.com/repos/' + GITHUB_OWNER + '/' + GITHUB_REPO + '/contents/' + DATA_PATH, {
+      method: 'PUT',
+      headers: {
+        Authorization: 'Bearer ' + GITHUB_TOKEN,
+        Accept: 'application/vnd.github+json',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        message: 'Update ' + projectParam + ' to stage ' + n,
+        content: newContentB64,
+        sha: fileData.sha,
+        branch: GITHUB_BRANCH
+      })
+    });
+    if (!putRes.ok) {
+      const errText = await putRes.text();
+      throw new Error('GitHub write failed (HTTP ' + putRes.status + '): ' + errText.slice(0, 200));
+    }
+
+    currentStage = n;
+    render();
+    showStatus('Saved. May take up to a minute to appear for other viewers.');
+  } catch (e) {
+    console.error('[project-lifecycle] save failed', e);
+    showStatus('Could not save: ' + e.message, true);
+  } finally {
+    setSaving(false);
+  }
+}
+
+// ================== Height reporting (for postMessage-aware embeds) ==================
 function reportHeight() {
   requestAnimationFrame(() => {
     const height = document.documentElement.scrollHeight;
     window.parent.postMessage({ iframeHeight: height }, '*');
-    // For Confluence's built-in iFrame macro, which only accepts a fixed
-    // Height value (no postMessage support): open this file directly in a
-    // browser tab with ?stage=N in the URL, open DevTools > Console, and
-    // read this logged value. Use that number as the macro's Height field.
     console.log('[project-lifecycle] content height:', height + 'px — use this in the Confluence iFrame macro Height field');
   });
 }
 window.addEventListener('resize', reportHeight);
+
+// ================== Init ==================
+render();
+if (mode === 'shared') {
+  loadSharedStage();
+}
 </script>
 </body>
 </html>
